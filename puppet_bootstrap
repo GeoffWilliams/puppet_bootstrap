@@ -1,0 +1,354 @@
+#!/usr/bin/env python
+import argparse
+import json
+import requests
+import sys
+from socket import gethostname
+import urllib3
+from socket import gethostbyname
+import ConfigParser
+import os.path
+import re
+import logging
+import tempfile
+import shutil
+import time
+
+# full path to expected config file
+CONFIG_FILE = "puppet_bootstrap.cfg"
+
+# config file section for VCenter and Puppet info
+CONFIG_SECT = "main"
+
+# config file section for interactive mode menu
+MENU_SECT = "menu"
+
+# value user can select to skip answering a question in interview mode
+INTERVIEW_SKIP = "nothing"
+
+# Tag pattern used in VCenter
+PP_REGEX    = re.compile('pp_.+')
+
+def fatal(message):
+    logging.error(message)
+    sys.exit(1)
+
+def load_config(sect):
+    """Load site-specific details for Puppet/VCenter"""
+    conf = {}
+    if os.path.isfile(CONFIG_FILE):
+        try:
+            config = ConfigParser.RawConfigParser()
+            config.read('puppet_bootstrap.cfg')
+            conf = dict(config.items(sect))
+
+        except ConfigParser.MissingSectionHeaderError:
+            fatal("Section missing from config file: `[%s]`" % sect)
+    else:
+        fatal("Missing config file at %s" % CONFIG_FILE)
+
+    return conf
+
+
+def install_puppet(conf, dry_run, tags):
+    """proceed to install puppet"""
+
+    # dump current settings and give chance to abort
+    output_settings(tags)
+    logging.info("CTRL+C now if incorrect!")
+    time.sleep(2)
+
+    # build the list of extensions
+    pp_ext = ""
+    for key in tags:
+        name = key
+        value = tags[key]
+
+        pp_ext += "extension_requests:%s=%s " % (name, value)
+
+    # We download the file using python instead of curl since we already have an
+    # interpretter up and running. This also prevents errors from curl getting
+    # lost in the pipeline
+    _, filename = tempfile.mkstemp()
+    url = "https://%s:8140/packages/current/install.bash" % conf["puppet_master_host"]
+    logging.debug("download puppet installer from %s" % url)
+
+    # rather then catch any errors here, we let urllib explode so that user can
+    # see the real error - eg host down, etc
+    r = requests.get(url, stream=True, verify=False)
+    with open(filename, 'w') as out_file:
+        out_file.write(r.content)
+        logging.info("Received puppet install script (%d bytes)" % out_file.tell())
+
+    cmd = "bash -s custom_attributes:challengePassword=%s %s < %s" % (
+        conf["shared_secret"],
+        pp_ext,
+        filename
+    )
+
+    if dry_run:
+        logging.info("Dry run would have run: %s" % cmd)
+    else:
+        logging.debug("Running command: %s" % cmd)
+        logging.info("Transferring control to Puppet install script...")
+        exit_code = os.system(cmd)
+        if exit_code:
+            fatal(
+                "Puppet install script exited with status error: %d, see previous output" %
+                exit_code
+            )
+        else:
+            logging.info("Puppet install script reports install OK")
+
+    # cleanup the tempfile
+    os.remove(filename)
+
+def login(conf):
+    """Obtain a login token from VCenter, use it generate the headers we need"""
+    # get token
+    r = requests.post(
+        conf["server"] + "/rest/com/vmware/cis/session",
+        auth=(conf["username"], conf["password"]),
+        verify=False
+    )
+
+    # response is always JSON, if we don't have key `value` then login failed
+    json = r.json()
+    if r.status_code == 200:
+        token = json["value"]
+        logging.debug("got token: " + str(token))
+
+        headers = {
+            'Accept': 'application/json',
+            "vmware-api-session-id": token,
+            "Content-Type": 'application/json'
+        }
+        logging.debug("VCenter login OK")
+    else:
+        fatal("Could not get VCenter authentication token - check username and password")
+
+    return headers
+
+
+def get_vm_tags(conf, headers, vm_name):
+    """Lookup a VM by name, and return the tag IDs associded with it"""
+    logging.debug("Looking up VM: %s" % vm_name)
+    r = requests.get(
+        conf["server"] + "/rest/vcenter/vm?filter.names.1=" + vm_name,
+        headers=headers,
+        verify=False
+    )
+
+    j = r.json()
+    logging.debug(j)
+    if len(j["value"]):
+        vm_id = j["value"][0]["vm"]
+        logging.debug("got vm ID: %s, looking up associated tags" % vm_id)
+
+        payload = {
+            "object_id": {
+                "id": vm_id,
+                "type": "VirtualMachine"
+            }
+        }
+
+        # get the associated tags
+        r = requests.post(
+            conf["server"] + "/rest/com/vmware/cis/tagging/tag-association?~action=list-attached-tags",
+            headers=headers,
+            data=json.dumps(payload),
+            verify=False
+        )
+
+        logging.debug("Associated tags: %s" % r.json())
+        tags = r.json()["value"]
+    else:
+        fatal("VCenter reports no such VM: %s" % vm_name)
+
+    return tags
+
+
+def get_category_name(conf, headers, category_id):
+    """Resolve category ID to name"""
+    # find the category info for each available ID and see if its the one we want
+    r = requests.get(
+        conf["server"] + "/rest/com/vmware/cis/tagging/category/id:" + category_id,
+        headers=headers,
+        verify=False
+    )
+    category_name = r.json()["value"]["name"]
+    logging.debug("category %s --> %s " % (category_id, category_name))
+    return category_name
+
+
+def get_tag_detail(conf, headers, tag_id):
+    """Resolve a tag ID into its detail view which includes category ID and
+    name (value)"""
+
+    logging.debug("resolve tag: %s" % tag_id)
+
+    # Get the value of the tag we want
+    r = requests.get(
+        conf["server"] + "/rest/com/vmware/cis/tagging/tag/id:" + tag_id,
+        headers=headers,
+        verify=False
+    )
+
+    tag_data = r.json()["value"]
+    logging.debug("tag data: %s" % tag_data)
+
+    # 2x fields of interest:
+    # * category_id
+    # * name
+    logging.debug("category id %s --> %s" % (tag_id, tag_data["name"]))
+    return tag_data
+
+
+def puppetmaster_dns(conf):
+    """create entry in /etc/hosts for puppetmaster if needed"""
+    puppet_master_resolved = False
+    try:
+        puppet_master_resolved = gethostbyname(conf["puppet_master_host"])
+    except:
+        pass
+
+    if puppet_master_resolved == conf["puppet_master_ip"]:
+        logging.info("resolved puppetmaster %s --> %s (OK)" %  (
+            conf["puppet_master_host"], conf["puppet_master_ip"])
+        )
+    else:
+        logging.info("Adding /etc/hosts record for puppetmaster: %s" % conf["puppet_master_host"])
+        with open("/etc/hosts", "a") as f:
+            f.write("\n#temporary puppet master override\n%s    %s\n" % (
+                conf["puppet_master_ip"],
+                conf["puppet_master_host"]
+            ))
+
+
+def main():
+    # CLI/options
+    parser = argparse.ArgumentParser(description='Bootstrap Puppet Agent from Enterprise Master')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode', default=False)
+    parser.add_argument('--vm-name', help='VM Name to lookup in VCenter', default=gethostname())
+    parser.add_argument('--no-hosts', action='store_true', help='Dont add puppet master to /etc/hosts', default=False)
+    parser.add_argument('--force', action='store_true', help='Force installation when no tags found', default=False)
+    parser.add_argument('--interactive', action='store_true', help='Ignore VCenter and enter tags manually', default=False)
+    parser.add_argument('--dry-run', action='store_true', help='Dont install puppet (for debugging)', default=False)
+    args = parser.parse_args()
+
+    #
+    logging.addLevelName(logging.WARNING, "\033[1;33m%s: \033[1;0m" % logging.getLevelName(logging.WARNING))
+    logging.addLevelName(logging.ERROR, "\033[1;31m%s: \033[1;0m" % logging.getLevelName(logging.ERROR))
+    logging.addLevelName(logging.INFO, "")
+    logging.addLevelName(logging.DEBUG, "\033[1;35m%s: \033[1;0m" % logging.getLevelName(logging.DEBUG))
+
+    level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(level=level, format='%(levelname)s%(message)s')
+
+    # shut up!
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+    # vcenter and puppet config
+    conf = load_config(CONFIG_SECT)
+
+    try:
+        if not args.no_hosts:
+            puppetmaster_dns(conf)
+
+        if args.interactive:
+            interview(args, conf)
+        else:
+            vcenter_lookup(args, conf)
+    except Exception as e:
+        # catch all top level exceptions unless in debug mode
+        if args.debug:
+            # re-trow the original exception preserving the stack trace
+            raise
+        else:
+            fatal(e.message)
+
+
+def ask_user(field, allowed_values):
+    """Ask the user to choose a value for `field` by entering a number
+    identifying one of the allowed values"""
+    answer = -1
+    allowed_count = len(allowed_values)
+    while answer < 0:
+        logging.info("Enter value for %s: " % field)
+        for i, allowed_value in enumerate(allowed_values):
+            logging.info("  %d - %s" % (i, allowed_value))
+        try:
+            answer = int(raw_input('>> ').strip())
+            if answer not in range(0, allowed_count):
+                logging.error("Invalid selection %d. Please enter a number between 0 and %d" %
+                    (answer, allowed_count - 1)
+                )
+                answer = -1
+        except ValueError:
+            logging.error("Not a number. Please enter a number between 0 and %d" % (allowed_count - 1))
+    return answer
+
+
+def output_settings(tags):
+    """Print out the settings we have obtained from interview/vcenter"""
+    logging.info("\n\nPUPPET SETTINGS:")
+    logging.info("================================")
+    for key in tags:
+        logging.info("%s --> %s" % (key, tags[key]))
+    logging.info("================================")
+
+
+def interview(args, conf):
+    logging.debug("starting interview...")
+    menu = load_config(MENU_SECT)
+    tags = {}
+    proceed = False
+    while not proceed:
+        for key in menu:
+            allowed_values = menu[key].split(",")
+            selected = ask_user(key, allowed_values)
+
+            # if user selected "nothing" as the value, then dont use this setting
+            if not allowed_values[selected] == INTERVIEW_SKIP:
+                tags[key] = allowed_values[selected]
+
+        output_settings(tags)
+        logging.info("Enter `yes` if correct, `no` to start again")
+        if raw_input('>> ').strip() == "yes":
+            proceed = True
+        else:
+            tags = {}
+
+    # User entered all details, proceed to install puppet
+    install_puppet(conf, args.dry_run, tags)
+
+
+def vcenter_lookup(args, conf):
+    # lookup in VCenter
+    headers = login(conf)
+    vm_tags = get_vm_tags(conf, headers, args.vm_name)
+
+    # categories = get_categories()
+    tags = {}
+
+    for tag_id in vm_tags:
+        tag_detail = get_tag_detail(conf, headers, tag_id)
+
+        # resolve the tag ID to a name and record if we are interested
+        category_name = get_category_name(conf, headers, tag_detail["category_id"])
+        if PP_REGEX.match(category_name):
+            tags[category_name] = tag_detail["name"]
+
+    logging.debug("Found %d VCenter tags for %s" % (len(tags), args.vm_name))
+    if len(tags) or args.force:
+        install_puppet(conf, args.dry_run, tags)
+    else:
+        fatal(
+            "No VCenter tags matching %s for %s (re-run with `--force` to register anyway"
+            % (PP_REGEX.pattern, args.vm_name)
+        )
+
+
+main()

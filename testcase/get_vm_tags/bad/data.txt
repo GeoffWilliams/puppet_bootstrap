@@ -1,0 +1,6 @@
+{
+    "object_id": {
+        "id": "vm-99",
+        "type": "VirtualMachine"
+    }
+}

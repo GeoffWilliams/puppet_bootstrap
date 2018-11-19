@@ -1,0 +1,59 @@
+Note: Unnecessary use of -X or --request, POST is already inferred.
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 192.168.43.164...
+* TCP_NODELAY set
+* Connected to photon-machine.lan.asio (192.168.43.164) port 443 (#0)
+* ALPN, offering h2
+* ALPN, offering http/1.1
+* successfully set certificate verify locations:
+*   CAfile: /etc/ssl/certs/ca-certificates.crt
+  CApath: /etc/ssl/certs
+} [5 bytes data]
+* TLSv1.2 (OUT), TLS handshake, Client hello (1):
+} [221 bytes data]
+* TLSv1.2 (IN), TLS handshake, Server hello (2):
+{ [57 bytes data]
+* TLSv1.2 (IN), TLS handshake, Certificate (11):
+{ [1053 bytes data]
+* TLSv1.2 (IN), TLS handshake, Server key exchange (12):
+{ [333 bytes data]
+* TLSv1.2 (IN), TLS handshake, Server finished (14):
+{ [4 bytes data]
+* TLSv1.2 (OUT), TLS handshake, Client key exchange (16):
+} [70 bytes data]
+* TLSv1.2 (OUT), TLS change cipher, Client hello (1):
+} [1 bytes data]
+* TLSv1.2 (OUT), TLS handshake, Finished (20):
+} [16 bytes data]
+* TLSv1.2 (IN), TLS handshake, Finished (20):
+{ [16 bytes data]
+* SSL connection using TLSv1.2 / ECDHE-RSA-AES256-GCM-SHA384
+* ALPN, server did not agree to a protocol
+* Server certificate:
+*  subject: CN=photon-machine.lan.asio; C=US
+*  start date: Nov 16 04:21:41 2018 GMT
+*  expire date: Nov 10 04:21:41 2028 GMT
+*  issuer: CN=CA; DC=vsphere; DC=local; C=US; ST=California; O=photon-machine.lan.asio; OU=VMware Engineering
+*  SSL certificate verify result: unable to get local issuer certificate (20), continuing anyway.
+} [5 bytes data]
+> POST /rest/com/vmware/cis/tagging/tag-association?~action=list-attached-tags HTTP/1.1
+> Host: photon-machine.lan.asio
+> User-Agent: curl/7.58.0
+> Accept: application/json
+> vmware-api-session-id: a1f4ef7ff00a693b608d8900d6fd2ec2
+> Content-Type: application/json
+> Content-Length: 84
+> 
+} [84 bytes data]
+* upload completely sent off: 84 out of 84 bytes
+{ [5 bytes data]
+< HTTP/1.1 200 OK
+< Date: Tue, 20 Nov 2018 00:17:39 GMT
+< Content-Type: application/json
+< Transfer-Encoding: chunked
+< 
+{ [250 bytes data]
+100   323    0   239  100    84   2715    954 --:--:-- --:--:-- --:--:--  3670
+* Connection #0 to host photon-machine.lan.asio left intact
+{"value":["urn:vmomi:InventoryServiceTag:c3c0273b-e888-4354-bc03-07b9771a28cc:GLOBAL","urn:vmomi:InventoryServiceTag:cd94fd2d-6acc-40b0-add1-269de2b04080:GLOBAL","urn:vmomi:InventoryServiceTag:7f75ce8e-972f-4155-8062-483e02a27da4:GLOBAL"]}
