@@ -14,7 +14,7 @@ import time
 import socket
 
 # full path to expected config file
-CONFIG_FILE = "puppet_bootstrap.cfg"
+CONFIG_FILE = "/etc/puppet_bootstrap/puppet_bootstrap.cfg"
 
 # config file section for VCenter and Puppet info
 CONFIG_SECT = "main"
@@ -38,7 +38,7 @@ def load_config(sect):
     if os.path.isfile(CONFIG_FILE):
         try:
             config = ConfigParser.RawConfigParser()
-            config.read('puppet_bootstrap.cfg')
+            config.read(CONFIG_FILE)
             conf = dict(config.items(sect))
 
         except ConfigParser.MissingSectionHeaderError:
