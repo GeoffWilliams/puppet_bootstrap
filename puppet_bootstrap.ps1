@@ -16,6 +16,8 @@
 #   Ignore VCenter and enter tags manually
 #.Parameter DryRun
 #   Dont install puppet (for debugging)
+#.Parameter Certname
+#   Name of this node in Puppet (defaults to FQDN)
 #.Example
 #   # Register automatically using VMWare
 #	  ./puppet_bootstrap.ps1
@@ -25,12 +27,13 @@
 ##>
 param(
     [Switch] $Debug = $false,
-    [String] $VmName = ($env:computerName | Out-String),
+    [String] $VmName = [System.Net.Dns]::GetHostByName($env:computerName).HostName,
     [Switch] $NoHosts = $true,
     [Switch] $Force = $false,
     [Switch] $Interactive = $false,
     [Switch] $DryRun = $false,
-    [Switch] $Verbose = $false
+    [Switch] $Verbose = $false,
+    [string] $Certname = [System.Net.Dns]::GetHostByName($env:computerName).HostName
 )
 
 # full path to expected config file
@@ -132,10 +135,10 @@ function loadConfig($sect) {
 }
 
 # proceed to install puppet
-function installPuppet ($conf, $dryRun, $tags) {
+function installPuppet ($conf, $dryRun, $tags, $finalCertname) {
 
     # dump current settings and give chance to abort
-    outputSettings $tags
+    outputSettings $tags $finalCertname
     write-host "CTRL+C now if incorrect!"
     sleep 2
 
@@ -147,6 +150,8 @@ function installPuppet ($conf, $dryRun, $tags) {
 
         $pp_ext += "extension_requests:$($name)=$($value) "
     }
+    $agent_certname = "agent:certname=$($finalCertname)"
+
     $tempFile = [System.IO.Path]::GetTempFileName() + ".ps1"
     $url = "https://$($conf['puppet_master_host']):8140/packages/current/install.ps1"
     write-verbose "download puppet installer from $($url)"
@@ -158,7 +163,7 @@ function installPuppet ($conf, $dryRun, $tags) {
     $tempFileSize = (Get-Item $tempFile).length
     write-host "Received puppet install script ($($tempFileSize) bytes)"
 
-    $args = "-file $($tempFile) custom_attributes:challengePassword=$($conf['shared_secret']) $($pp_ext)"
+    $args = "-file $($tempFile) custom_attributes:challengePassword=$($conf['shared_secret']) $($pp_ext) $($agent_certname)"
     if ($DryRun) {
         write-host "Dry run would have run powershell with args: $($args)"
     } else {
@@ -193,6 +198,7 @@ function login ($conf) {
     $authHeaders = @{ "Authorization" = $basicAuthValue }
     
     # get token
+    write-host ($conf['server'] + "/rest/com/vmware/cis/session")
     $r = invoke-WebRequest -UseBasicParsing -uri ($conf['server'] + "/rest/com/vmware/cis/session") -method Post -Headers $authHeaders
 
     if ($r.StatusCode -eq 200) {
@@ -306,9 +312,9 @@ function main() {
         }
 
         if ($Interactive) {
-            interview $args $conf
+            interview $conf
         } else {
-            vcenterLookup $args $conf
+            vcenterLookup $conf
         }
     } catch {
         # catch all top level exceptions unless in debug mode
@@ -352,9 +358,10 @@ function askUser($field, $allowedValues) {
 }
 
 # Print out the settings we have obtained from interview/vcenter
-function outputSettings($tags) {    
+function outputSettings($tags, $finalCertname) {    
     write-host "`r`n`r`nPUPPET SETTINGS:"
     write-host "================================"
+    write-host "certname --> $($finalCertname)"
     foreach ($key in $tags.keys) {
         $value = $tags."$($key)"
         write-host "$($key) --> $($value)"
@@ -362,12 +369,19 @@ function outputSettings($tags) {
     write-host("================================")
 }
 
-function interview($args, $conf) {
+function interview($conf) {
     write-verbose("starting interview...")
     $menu = loadConfig $MENU_SECT
     $tags = @{}
+
+
     $proceed = $false
     while (-not $proceed) {
+        # confirm certname
+        write-host("Enter certname for this node: ")
+        $rawCertname = read-host "[$($Certname)] >> "
+        $finalCertname = if ($rawCertname -eq "") {$Certname} else {$rawCertname}
+
         foreach ($key in $menu.keys) {
             $allowedValues = $menu[$key].split(",")
             $selected = askUser $key $allowedValues
@@ -377,7 +391,7 @@ function interview($args, $conf) {
                 $tags[$key] = $allowedValues[$selected]
             }
         }
-        outputSettings $tags
+        outputSettings $tags $finalCertname
         write-host "Enter 'yes' if correct, 'no' to start again"
         if ((read-host '>> ') -eq "yes") {
             $proceed = $true
@@ -386,11 +400,11 @@ function interview($args, $conf) {
         }
     }
     # User entered all details, proceed to install puppet
-    installPuppet $conf $DryRun $tags
+    installPuppet $conf $DryRun $tags $finalCertname
 }
 
 # lookup in VCenter
-function vcenterLookup($args, $conf) {
+function vcenterLookup($conf) {
     $headers = login $conf
     $vmTags = getVmTags $conf $headers $VmName
 
@@ -408,7 +422,7 @@ function vcenterLookup($args, $conf) {
     }
     write-verbose "Found $($tags.Count) VCenter tags for $($VmName)"
     if ($tags.Count -or $Force) {
-        installPuppet $conf $DryRun $tags
+        installPuppet $conf $DryRun $tags $Certname
     } else {
         fatal "No VCenter tags matching $($PP_REGEX) for $($VmName) (re-run with `--force` to register anyway"
     }

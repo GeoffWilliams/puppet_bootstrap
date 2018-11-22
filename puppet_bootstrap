@@ -3,9 +3,7 @@ import argparse
 import json
 import requests
 import sys
-from socket import gethostname
 import urllib3
-from socket import gethostbyname
 import ConfigParser
 import os.path
 import re
@@ -13,6 +11,7 @@ import logging
 import tempfile
 import shutil
 import time
+import socket
 
 # full path to expected config file
 CONFIG_FILE = "puppet_bootstrap.cfg"
@@ -50,11 +49,11 @@ def load_config(sect):
     return conf
 
 
-def install_puppet(conf, dry_run, tags):
+def install_puppet(conf, dry_run, tags, certname):
     """proceed to install puppet"""
 
     # dump current settings and give chance to abort
-    output_settings(tags)
+    output_settings(tags, certname)
     logging.info("CTRL+C now if incorrect!")
     time.sleep(2)
 
@@ -65,6 +64,8 @@ def install_puppet(conf, dry_run, tags):
         value = tags[key]
 
         pp_ext += "extension_requests:%s=%s " % (name, value)
+
+    agent_certname = "agent:certname=%s" % certname
 
     # We download the file using python instead of curl since we already have an
     # interpretter up and running. This also prevents errors from curl getting
@@ -80,9 +81,10 @@ def install_puppet(conf, dry_run, tags):
         out_file.write(r.content)
         logging.info("Received puppet install script (%d bytes)" % out_file.tell())
 
-    cmd = "bash -s custom_attributes:challengePassword=%s %s < %s" % (
+    cmd = "bash -s custom_attributes:challengePassword=%s %s %s< %s" % (
         conf["shared_secret"],
         pp_ext,
+        agent_certname,
         filename
     )
 
@@ -208,7 +210,7 @@ def puppetmaster_dns(conf):
     """create entry in /etc/hosts for puppetmaster if needed"""
     puppet_master_resolved = False
     try:
-        puppet_master_resolved = gethostbyname(conf["puppet_master_host"])
+        puppet_master_resolved = socket.gethostbyname(conf["puppet_master_host"])
     except:
         pass
 
@@ -229,7 +231,8 @@ def main():
     # CLI/options
     parser = argparse.ArgumentParser(description='Bootstrap Puppet Agent from Enterprise Master')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode', default=False)
-    parser.add_argument('--vm-name', help='VM Name to lookup in VCenter', default=gethostname())
+    parser.add_argument('--vm-name', help='VM Name to lookup in VCenter', default=socket.getfqdn())
+    parser.add_argument('--certname', help='Name of this node in Puppet (defaults to FQDN)', default=socket.getfqdn())
     parser.add_argument('--no-hosts', action='store_true', help='Dont add puppet master to /etc/hosts', default=False)
     parser.add_argument('--force', action='store_true', help='Force installation when no tags found', default=False)
     parser.add_argument('--interactive', action='store_true', help='Ignore VCenter and enter tags manually', default=False)
@@ -291,10 +294,11 @@ def ask_user(field, allowed_values):
     return answer
 
 
-def output_settings(tags):
+def output_settings(tags, certname):
     """Print out the settings we have obtained from interview/vcenter"""
     logging.info("\n\nPUPPET SETTINGS:")
     logging.info("================================")
+    logging.info("certname --> %s" % certname)
     for key in tags:
         logging.info("%s --> %s" % (key, tags[key]))
     logging.info("================================")
@@ -304,8 +308,14 @@ def interview(args, conf):
     logging.debug("starting interview...")
     menu = load_config(MENU_SECT)
     tags = {}
+
     proceed = False
     while not proceed:
+        # confirm certname
+        logging.info("Enter certname for this node: ")
+        raw_certname = raw_input('[%s] >> ' % args.certname)
+        certname = args.certname if raw_certname == "" else raw_certname
+
         for key in menu:
             allowed_values = menu[key].split(",")
             selected = ask_user(key, allowed_values)
@@ -314,7 +324,7 @@ def interview(args, conf):
             if not allowed_values[selected] == INTERVIEW_SKIP:
                 tags[key] = allowed_values[selected]
 
-        output_settings(tags)
+        output_settings(tags, certname)
         logging.info("Enter `yes` if correct, `no` to start again")
         if raw_input('>> ').strip() == "yes":
             proceed = True
@@ -322,7 +332,7 @@ def interview(args, conf):
             tags = {}
 
     # User entered all details, proceed to install puppet
-    install_puppet(conf, args.dry_run, tags)
+    install_puppet(conf, args.dry_run, tags, certname)
 
 
 def vcenter_lookup(args, conf):
@@ -343,7 +353,7 @@ def vcenter_lookup(args, conf):
 
     logging.debug("Found %d VCenter tags for %s" % (len(tags), args.vm_name))
     if len(tags) or args.force:
-        install_puppet(conf, args.dry_run, tags)
+        install_puppet(conf, args.dry_run, tags, args.certname)
     else:
         fatal(
             "No VCenter tags matching %s for %s (re-run with `--force` to register anyway"
