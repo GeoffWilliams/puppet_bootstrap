@@ -159,7 +159,18 @@ some circumstances and especially for troubleshooting
 * You can use any of the Puppet custom OIDs you like - just start using them
   in the VCenter or the menu in the config file. Puppet custom OIDs all start 
   `pp_`
-  
+* If no tags are found for a VM in VMWare, the bootstrap script will stop. This
+  is to prevent accidentally signing a bad certificate. If your sure no tags
+  need setting, run with `--force` (Linux) or `-Force` (Windows) to install
+  anyway
+* We suggest you provision VMs using the machine FQDN as the VM name in order to
+  have consistent naming across both VMWare and Puppet Enterprise. If your site
+  has a different convention, you can supply a different VM Name to lookup in
+  VCenter on the commandline, eg to use short hostname for VMware and FQDN for 
+  Puppet:
+    * Linux: `./puppet_bootstrap -vm-name $(hostname -s)`
+    * Windows: `powershell -file .\puppet_bootstrap.ps1 -VmName ($env:computerName|out-string)`
+
 # Security concerns
 
 At some point it becomes necessary to have cleartext credentials in order to
@@ -227,3 +238,9 @@ bootstrap the system automatically. The alternatives to this would be:
   the Puppet Master first: `puppet node purge certname.to.purge`
 * Node must be able to reach the VCenter API (port 443)
 * Node must be able to reach the Puppet Master (port 8140)
+* Windows VMs won't have a domain name until they are joined to a domain. If you
+  need to supply one to match name set in VMWare or desired in Puppet Enterprise
+  you can do so on the command line:
+  ```powershell
+  `-VmName ($env:computerName + ".megacorp.infra") -Certname ($env:computerName + ".megacorp.infra")`
+  ```
