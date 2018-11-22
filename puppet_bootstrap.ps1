@@ -28,7 +28,7 @@
 param(
     [Switch] $Debug = $false,
     [String] $VmName = [System.Net.Dns]::GetHostByName($env:computerName).HostName,
-    [Switch] $NoHosts = $true,
+    [Switch] $NoHosts = $false,
     [Switch] $Force = $false,
     [Switch] $Interactive = $false,
     [Switch] $DryRun = $false,
@@ -37,7 +37,7 @@ param(
 )
 
 # full path to expected config file
-$CONFIG_FILE = "puppet_bootstrap.cfg"
+$CONFIG_FILE = "c:\ProgramData\puppet_bootstrap\puppet_bootstrap.cfg"
 
 # config file section for VCenter and Puppet info
 $CONFIG_SECT = "main"

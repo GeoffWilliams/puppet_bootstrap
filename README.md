@@ -170,6 +170,9 @@ some circumstances and especially for troubleshooting
   Puppet:
     * Linux: `./puppet_bootstrap -vm-name $(hostname -s)`
     * Windows: `powershell -file .\puppet_bootstrap.ps1 -VmName ($env:computerName|out-string)`
+* We will update your `hosts` file with a reference to the Puppet Master if it
+  is not _resolvable_. If you don't want this to happen run with `--no-hosts` 
+  (Linux) or `-NoHosts` (Windows)
 
 # Security concerns
 
