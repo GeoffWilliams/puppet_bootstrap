@@ -27,13 +27,13 @@
 ##>
 param(
     [Switch] $Debug = $false,
-    [String] $VmName = [System.Net.Dns]::GetHostByName($env:computerName).HostName,
+    [String] $VmName = [System.Net.Dns]::GetHostByName($env:computerName).HostName.toLower(),
     [Switch] $NoHosts = $false,
     [Switch] $Force = $false,
     [Switch] $Interactive = $false,
     [Switch] $DryRun = $false,
     [Switch] $Verbose = $false,
-    [string] $Certname = [System.Net.Dns]::GetHostByName($env:computerName).HostName
+    [string] $Certname = [System.Net.Dns]::GetHostByName($env:computerName).HostName.toLower()
 )
 
 # full path to expected config file

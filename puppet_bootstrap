@@ -231,8 +231,8 @@ def main():
     # CLI/options
     parser = argparse.ArgumentParser(description='Bootstrap Puppet Agent from Enterprise Master')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode', default=False)
-    parser.add_argument('--vm-name', help='VM Name to lookup in VCenter', default=socket.getfqdn())
-    parser.add_argument('--certname', help='Name of this node in Puppet (defaults to FQDN)', default=socket.getfqdn())
+    parser.add_argument('--vm-name', help='VM Name to lookup in VCenter', default=socket.getfqdn().lower())
+    parser.add_argument('--certname', help='Name of this node in Puppet (defaults to FQDN)', default=socket.getfqdn().lower())
     parser.add_argument('--no-hosts', action='store_true', help='Dont add puppet master to /etc/hosts', default=False)
     parser.add_argument('--force', action='store_true', help='Force installation when no tags found', default=False)
     parser.add_argument('--interactive', action='store_true', help='Ignore VCenter and enter tags manually', default=False)
