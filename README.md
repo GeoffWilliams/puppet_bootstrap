@@ -56,7 +56,7 @@ Puppet will be automatically configured during first boot. This involves:
     5. Run the custom CURL command
         * If successful, Puppet 
     6. When puppet first runs, suggest we have a `profile::cleanup` that removes
-       all of the above, leaving an adapted version of Saxon's signup script\
+       the `puppet_bootstrap.cfg` file
 
 
 ## Config file
